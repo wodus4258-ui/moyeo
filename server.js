@@ -11,6 +11,82 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const { createClient } = require('@supabase/supabase-js');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const https = require('https');
+
+// JWKS 캐시 (ES256/RS256 검증용)
+let _jwksCache = { keys: null, fetchedAt: 0 };
+async function fetchJWKS(force){
+  if(!force && _jwksCache.keys && Date.now() - _jwksCache.fetchedAt < 3600000){
+    return _jwksCache.keys;
+  }
+  const url = SUPABASE_URL.replace(/\/$/, '') + '/auth/v1/.well-known/jwks.json';
+  try{
+    const res = await fetch(url);
+    if(!res.ok) return null;
+    const data = await res.json();
+    _jwksCache = { keys: data.keys || [], fetchedAt: Date.now() };
+    return _jwksCache.keys;
+  }catch(e){
+    console.error('[JWKS] fetch failed:', e.message);
+    return null;
+  }
+}
+function base64UrlDecode(str){
+  str = String(str).replace(/-/g, '+').replace(/_/g, '/');
+  while(str.length % 4) str += '=';
+  return Buffer.from(str, 'base64');
+}
+
+async function verifySupabaseJWT(token){
+  try{
+    if(!token) return null;
+    const parts = token.split('.');
+    if(parts.length !== 3) return null;
+    const headerB64 = parts[0], payloadB64 = parts[1], signatureB64 = parts[2];
+    let header, payload;
+    try{
+      header = JSON.parse(base64UrlDecode(headerB64).toString('utf8'));
+      payload = JSON.parse(base64UrlDecode(payloadB64).toString('utf8'));
+    }catch(e){ return null; }
+    if(payload.exp && (payload.exp * 1000) < Date.now()) return null;
+
+    const signatureInput = headerB64 + '.' + payloadB64;
+    const signature = base64UrlDecode(signatureB64);
+
+    if(header.alg === 'HS256'){
+      const expected = crypto.createHmac('sha256', SUPABASE_JWT_SECRET).update(signatureInput).digest();
+      if(expected.length !== signature.length) return null;
+      if(!crypto.timingSafeEqual(expected, signature)) return null;
+      return payload;
+    }
+
+    if(header.alg === 'ES256' || header.alg === 'RS256'){
+      let keys = await fetchJWKS(false);
+      let jwk = (keys || []).find(k => k.kid === header.kid);
+      if(!jwk){
+        keys = await fetchJWKS(true);
+        jwk = (keys || []).find(k => k.kid === header.kid);
+      }
+      if(!jwk) return null;
+      const publicKey = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+      const data = Buffer.from(signatureInput, 'utf8');
+      let ok = false;
+      if(header.alg === 'ES256'){
+        ok = crypto.verify('sha256', data, { key: publicKey, dsaEncoding: 'ieee-p1363' }, signature);
+      } else {
+        ok = crypto.verify('sha256', data, publicKey, signature);
+      }
+      if(!ok) return null;
+      return payload;
+    }
+
+    return null;
+  }catch(e){
+    console.error('[JWT] verify error:', e.message);
+    return null;
+  }
+}
 
 // ---------- 환경변수 ----------
 const {
@@ -21,10 +97,11 @@ const {
   PORT = 10000,
 } = process.env;
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !SUPABASE_JWT_SECRET) {
-  console.error('[FATAL] 필수 환경변수 누락: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET');
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  console.error('[FATAL] 필수 환경변수 누락: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY');
   process.exit(1);
 }
+// SUPABASE_JWT_SECRET 은 HS256 검증 시에만 필요 (새 프로젝트는 ES256 이라 없어도 됨)
 
 // ---------- Supabase (service_role, 서버 전용) ----------
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
@@ -147,10 +224,8 @@ async function handleAuth(client, msg) {
   const token = msg.jwt;
   if (!token) return send(client, { type: 'auth:error', message: 'no token' });
 
-  let payload;
-  try {
-    payload = jwt.verify(token, SUPABASE_JWT_SECRET, { algorithms: ['HS256'] });
-  } catch (e) {
+  const payload = await verifySupabaseJWT(token);
+  if (!payload) {
     return send(client, { type: 'auth:error', message: 'invalid token' });
   }
 
@@ -455,7 +530,6 @@ function broadcastPresence(userId, online) {
 }
 
 // PIN hash (SHA-256)
-const crypto = require('crypto');
 function hashPin(pin) {
   return crypto.createHash('sha256').update(String(pin)).digest('hex');
 }
