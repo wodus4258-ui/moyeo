@@ -220,7 +220,37 @@ async function handleMessage(client, msg) {
     case 'broadcast:state': return handleBroadcastState(client, msg);
     case 'query-presence':  return handleQueryPresence(client, msg);
     case 'notify-member':   return handleNotifyMember(client, msg);
+    case 'file:relay':      return handleFileRelay(client, msg);
+    case 'file:broadcast':  return handleFileBroadcast(client, msg);
   }
+}
+
+// ============================================================
+// 파일 호스팅 릴레이
+// ============================================================
+function handleFileRelay(client, msg) {
+  if (!client.roomCode) return;
+  if (!msg.to) return;
+  const target = clients.get(msg.to);
+  if (!target || target.roomCode !== client.roomCode) return;
+  send(target, {
+    type: 'file:relay',
+    from: client.id,
+    fromNickname: client.nickname,
+    kind: msg.kind,
+    payload: msg.payload,
+  });
+}
+
+function handleFileBroadcast(client, msg) {
+  if (!client.roomCode) return;
+  broadcastToRoom(client.roomCode, {
+    type: 'file:broadcast',
+    from: client.id,
+    fromNickname: client.nickname,
+    kind: msg.kind,
+    payload: msg.payload,
+  }, client.id);
 }
 
 // ============================================================
