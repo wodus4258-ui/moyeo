@@ -218,6 +218,8 @@ async function handleMessage(client, msg) {
     case 'rtc:ice':         return relayToRoom(client, msg.to, { type: 'rtc:ice', from: client.id, candidate: msg.candidate });
     case 'chat:send':       return handleChatSend(client, msg);
     case 'broadcast:state': return handleBroadcastState(client, msg);
+    case 'query-presence':  return handleQueryPresence(client, msg);
+    case 'notify-member':   return handleNotifyMember(client, msg);
   }
 }
 
@@ -525,6 +527,29 @@ function broadcastToRoom(code, obj, exceptId) {
     const c = clients.get(cid);
     if (c) { try { c.ws.send(json); } catch (e) {} }
   }
+}
+
+// 프론트가 친구들 presence를 일괄 조회
+function handleQueryPresence(client, msg) {
+  const ids = Array.isArray(msg.userIds) ? msg.userIds : [];
+  const online = {};
+  ids.forEach(uid => {
+    const set = userToClients.get(uid);
+    online[uid] = !!(set && set.size > 0);
+  });
+  send(client, { type: 'presence:query-result', online });
+}
+
+// 친구 요청/수락 등 상대에게 즉시 알림
+function handleNotifyMember(client, msg) {
+  const targetId = msg.targetUserId;
+  if (!targetId || typeof targetId !== 'string') return;
+  const set = userToClients.get(targetId);
+  if (!set) return;
+  set.forEach(cid => {
+    const c = clients.get(cid);
+    if (c) send(c, { type: 'friend:update' });
+  });
 }
 
 function broadcastPresence(userId, online) {
