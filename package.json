@@ -1,0 +1,16 @@
+{
+  "name": "moyeo-signaling",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
