@@ -104,6 +104,10 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 // SUPABASE_JWT_SECRET 은 HS256 검증 시에만 필요 (새 프로젝트는 ES256 이라 없어도 됨)
 
 // ---------- Supabase (service_role, 서버 전용) ----------
+// 디버그: 어떤 키를 쓰고 있는지 앞 20자만 출력 (전체 노출 X)
+console.log('[boot] SUPABASE_URL =', SUPABASE_URL);
+console.log('[boot] SERVICE_ROLE_KEY prefix =', (SUPABASE_SERVICE_ROLE_KEY || '').slice(0, 20) + '...');
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
@@ -233,6 +237,7 @@ async function handleAuth(client, msg) {
   if (!userId) return send(client, { type: 'auth:error', message: 'no sub' });
 
   // 프로필 조회
+  console.log(`[auth] looking up profile for userId=${userId}`);
   const { data: profile, error } = await supabase
     .from('profiles')
     .select('account_id, nickname')
@@ -240,8 +245,12 @@ async function handleAuth(client, msg) {
     .single();
 
   if (error || !profile) {
+    console.error(`[auth] profile lookup FAILED for ${userId}`);
+    console.error(`[auth] error:`, JSON.stringify(error, null, 2));
+    console.error(`[auth] data:`, profile);
     return send(client, { type: 'auth:error', message: 'profile not found' });
   }
+  console.log(`[auth] profile OK: ${profile.account_id} / ${profile.nickname}`);
 
   client.userId = userId;
   client.accountId = profile.account_id;
