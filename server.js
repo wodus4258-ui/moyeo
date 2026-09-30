@@ -455,22 +455,26 @@ function handleChatSend(client, msg) {
   const text = String(msg.text || '').slice(0, 2000);
   if (!text.trim()) return;
 
+  const ts = Date.now();
+
+  // sender 제외한 나머지에게만 broadcast
   broadcastToRoom(client.roomCode, {
     type: 'chat:message',
     from: client.id,
     fromNickname: client.nickname,
     fromUserId: client.userId,
     text,
-    ts: Date.now(),
-  });
-  // 자기 자신에도 에코 (UI 정합성)
+    ts,
+  }, client.id);
+
+  // sender 본인에게만 self:true 로 별도 전송
   send(client, {
     type: 'chat:message',
     from: client.id,
     fromNickname: client.nickname,
     fromUserId: client.userId,
     text,
-    ts: Date.now(),
+    ts,
     self: true,
   });
 }
