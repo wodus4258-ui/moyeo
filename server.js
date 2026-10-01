@@ -222,6 +222,7 @@ async function handleMessage(client, msg) {
     case 'notify-member':   return handleNotifyMember(client, msg);
     case 'file:relay':      return handleFileRelay(client, msg);
     case 'file:broadcast':  return handleFileBroadcast(client, msg);
+    case 'room:delete':     return handleRoomDelete(client);
   }
 }
 
@@ -475,6 +476,43 @@ function leaveRoom(client) {
       .eq('id', memRoom.roomId)
       .then(() => {});
   }
+}
+
+// ============================================================
+// 방 삭제 (호스트 전용, DB row까지 완전 삭제)
+//  - 서버가 service_role 로 DB delete (RLS 우회)
+//  - room_secrets / room_members 는 ON DELETE CASCADE 로 자동 정리
+//  - 모든 멤버에게 room:deleted 브로드캐스트 후 인메모리 정리
+// ============================================================
+async function handleRoomDelete(client) {
+  if (!client.roomCode) return;
+  const memRoom = rooms.get(client.roomCode);
+  if (!memRoom) return;
+  if (memRoom.hostId !== client.userId) {
+    return send(client, { type: 'room:error', message: 'only host can delete' });
+  }
+
+  const code = memRoom.code;
+  const roomId = memRoom.roomId;
+
+  // 1) DB row 삭제 (실패 시 아무도 내보내지 않음)
+  const { error } = await supabase.from('rooms').delete().eq('id', roomId);
+  if (error) {
+    console.error('[room:delete] DB error:', error.message);
+    return send(client, { type: 'room:error', message: 'delete failed' });
+  }
+
+  // 2) 모든 멤버(호스트 포함)에게 브로드캐스트
+  broadcastToRoom(code, { type: 'room:deleted', roomId });
+
+  // 3) 인메모리 정리
+  for (const [cid] of memRoom.members) {
+    const c = clients.get(cid);
+    if (c) c.roomCode = null;
+  }
+  rooms.delete(code);
+
+  console.log(`[room] ${code} DELETED by ${client.nickname}`);
 }
 
 // ============================================================
